@@ -427,13 +427,13 @@ class frozen_likelihood:
     # Placeholder for the likelihood (with partial code provided).
     # Hint: you may want to add input parameters to these methods.
 
-    def __init__(self, gtab, sigma):
-        # p(y|S_0, D, x)
+    def __init__(self, gtab, sigma):        
         self.gtab = gtab   # store gradient table with b-values and b-vectors
         self.sigma = sigma
-        raise NotImplementedError
+        #raise NotImplementedError
 
-    def logpdf(self, S0, evecs, evals):
+    def logpdf(self, S0, evecs, evals, y):
+        #p(z|Data) \prop p(Data|z)p(z)
         S0 = np.atleast_1d(S0)        # ensure S0 is array-like
         D = compute_D(evals, evecs)   # reconstruct diffusion tensor
 
@@ -444,9 +444,9 @@ class frozen_likelihood:
         # Model signal S given tensor D and baseline S0
         S = S0[:, None] * np.exp( - np.einsum('...j, ijk, ...k->i...', q, D, q))
 
-        return np.sum(norm.logpdf(y, loc=S, scale=self.sigma))
+        return np.sum(norm.logpdf(y, loc=S, scale=self.sigma**2))
         
-        raise NotImplementedError
+        #raise NotImplementedError
 
 
 
@@ -612,12 +612,16 @@ def main():
 
     prior = frozen_prior(sigma, alpha_s, theta_s, alpha_lambda, theta_lambda)
 
-    s0, lam, V = prior.rvs(2)
+    s0, lam, V = prior.rvs(1)
     print(s0)
     print(lam)
     print(V)
 
-    likelihood = frozen_likelihood(gtab)
+    print("prior logpdf: ",prior.logpdf(s0,lam,V))
+
+    likelihood = frozen_likelihood(gtab, sigma)
+    a = likelihood.logpdf(S0_init, evecs_init, evals_init, y)
+    print("likelihood logpdf: ",a)
     
     # Run Metropolis–Hastings and plot results
     S0_mh, evals_mh, evecs_mh = metropolis_hastings(force_recompute=False)
