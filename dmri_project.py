@@ -408,18 +408,22 @@ class frozen_prior:
 
     def __init__(self, alpha_s, theta_s, alpha_lambda, theta_lambda):
         self.p_s0 = gamma(a=alpha_s, scale=theta_s)
-        self.p_lam = gamma(a=alpha_lambda, scale=theta_lambda)
+        self.p_lam1 = gamma(a=alpha_lambda, scale=theta_lambda)
+        self.p_lam2 = gamma(a=alpha_lambda, scale=theta_lambda)
+        self.p_lam3 = gamma(a=alpha_lambda, scale=theta_lambda)
 
     # random variable sampling
-    def rvs(self, size, seed=None):
+    def rvs(self, size):
         #p(z) = p(S0) p(λ1) p(λ2) p(λ3) p(V)
-        s0 = self.p_s0.rvs(size=size, random_state=seed)
-        lam = self.p_lam.rvs(size=size, random_state=seed)
-        V = Rotation.random(size, rng=seed).as_matrix()
-        return s0, lam, V
+        s0 = self.p_s0.rvs(size=size)
+        lam1 = self.p_lam1.rvs(size=size)
+        lam2 = self.p_lam2.rvs(size=size)
+        lam3 = self.p_lam3.rvs(size=size)
+        V = Rotation.random(size).as_matrix()
+        return s0, lam1,lam2,lam3, V
     
-    def logpdf(self, s0, lam, V):
-        return self.p_s0.logpdf(s0) + self.p_lam.logpdf(lam).sum(axis=-1)
+    def logpdf(self, s0, lam1, lam2, lam3, V):
+        return self.p_s0.logpdf(s0) + self.p_lam1.logpdf(lam1) + self.p_lam2.logpdf(lam2) + self.p_lam3.logpdf(lam3)
 
 
 class frozen_likelihood:
@@ -611,12 +615,14 @@ def main():
 
     prior = frozen_prior(alpha_s, theta_s, alpha_lambda, theta_lambda)
 
-    s0, lam, V = prior.rvs(1)
-    print(s0)
-    print(lam)
-    print(V)
+    s0, lam1,lam2,lam3, V = prior.rvs(1)
+    print("s0:", s0)
+    print("lam1:", lam1)
+    print("lam2:", lam2)
+    print("lam3:", lam3)
+    print("v:", V)
 
-    print("prior logpdf: ",prior.logpdf(s0,lam,V))
+    print("prior logpdf: ",prior.logpdf(s0,lam1,lam2,lam3,V))
 
     likelihood = frozen_likelihood(gtab, sigma)
     a = likelihood.logpdf(S0_init, evecs_init, evals_init, y)
