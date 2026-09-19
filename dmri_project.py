@@ -615,14 +615,8 @@ def main():
 
     prior = frozen_prior(alpha_s, theta_s, alpha_lambda, theta_lambda)
 
-    s0, lam1,lam2,lam3, V = prior.rvs(1)
-    print("s0:", s0)
-    print("lam1:", lam1)
-    print("lam2:", lam2)
-    print("lam3:", lam3)
-    print("v:", V)
 
-    print("prior logpdf: ",prior.logpdf(s0,lam1,lam2,lam3,V))
+    print("prior logpdf: ",prior.logpdf(S0_init,evals_init[0],evals_init[1],evals_init[2],evecs_init))
 
     likelihood = frozen_likelihood(gtab, sigma)
     a = likelihood.logpdf(S0_init, evecs_init, evals_init, y)
