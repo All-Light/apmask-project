@@ -406,10 +406,9 @@ class frozen_prior:
     # Placeholder for the prior distribution.
     # Hint: you may want to add input parameters to these methods.
 
-    def __init__(self, sigma, alpha_s, theta_s, alpha_lambda, theta_lambda):
-        self.sigma = sigma
-        self.p_s0 = gamma(alpha_s, scale=theta_s)
-        self.p_lam = gamma(alpha_lambda, scale=theta_lambda)
+    def __init__(self, alpha_s, theta_s, alpha_lambda, theta_lambda):
+        self.p_s0 = gamma(a=alpha_s, scale=theta_s)
+        self.p_lam = gamma(a=alpha_lambda, scale=theta_lambda)
 
     # random variable sampling
     def rvs(self, size, seed=None):
@@ -444,7 +443,7 @@ class frozen_likelihood:
         # Model signal S given tensor D and baseline S0
         S = S0[:, None] * np.exp( - np.einsum('...j, ijk, ...k->i...', q, D, q))
 
-        return np.sum(norm.logpdf(y, loc=S, scale=self.sigma**2))
+        return np.sum(norm.logpdf(y, loc=S, scale=self.sigma))
         
         #raise NotImplementedError
 
@@ -610,7 +609,7 @@ def main():
     alpha_lambda = 4
     theta_lambda = 2.5*10**(-4)
 
-    prior = frozen_prior(sigma, alpha_s, theta_s, alpha_lambda, theta_lambda)
+    prior = frozen_prior(alpha_s, theta_s, alpha_lambda, theta_lambda)
 
     s0, lam, V = prior.rvs(1)
     print(s0)
