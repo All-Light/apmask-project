@@ -545,16 +545,75 @@ def metropolis_hastings(n_samples, gamma_param, nu_param, plot_traces=False):
     return S0_samples, evals_samples, evecs_samples
 
 
-@disk_memoize()
-def importance_sampling(n_samples, gamma_param, nu_param):
+#@disk_memoize()
+def importance_sampling(prior, likelihood, y, n_samples, gamma_param, nu_param, S0_init, D_init):
     # Students: implement Importance Sampling here.
     # Before starting, make sure the prior and likelihood are implemented.
     # Note: you may change, add, or remove input parameters depending on your design
     # (e.g. pass initialization values like those prepared in main()).
 
-    raise NotImplementedError
+    # problem: We cannot sample the true pdf pi(x) of our problem and must estimate it
+    # main idea:
+    #   - sample a proposal r(x) (wishart)
+    #   - compensate the mismatch by importance weights wi
 
-    return importance_weights, S0_samples, evals_samples, evecs_samples
+    q_s0 = gamma(a=gamma_param**(-2), scale=gamma_param**2*S0_init) # gamma distribution
+    q_D = wishart(df=nu_param, scale=D_init/nu_param) # wishart distribution
+
+    S0_samples = q_s0.rvs(size=n_samples)
+    D_samples = q_D.rvs(size=n_samples)
+
+    evals_samples = np.zeros((n_samples,3)) #eigenvalues
+    evecs_samples = np.zeros((n_samples,3,3)) #eigenvectors
+
+    importance_weights = np.zeros(n_samples)
+    for n in range(n_samples):
+
+        evals, evecs = np.linalg.eigh(D_samples[n])
+        evals_samples[n] = evals
+        evecs_samples[n] = evecs
+
+        # correction term due to the wishart being sampled 
+        #  using other coordinates
+        log_jacobian = (
+            np.log(evals[1] - evals[0])
+            + np.log(evals[2] - evals[0])
+            + np.log(evals[2] - evals[1])
+        )
+        # likelihood sample
+        log_likelihood = likelihood.logpdf(
+            S0=S0_samples[n], 
+            evals=evals,
+            evecs=evecs, 
+            y=y
+        )
+        # prior sample
+        log_prior = prior.logpdf(
+            s0=S0_samples[n],
+            lam1=evals[0],
+            lam2=evals[1],
+            lam3=evals[2],
+            V=evecs
+        )
+
+        log_proposal = (
+            q_s0.logpdf(S0_samples[n])
+            + q_D.logpdf(D_samples[n])
+            + log_jacobian
+        )
+        # weight = likelihood*prior/proposal pdfs
+        importance_weights[n] = (
+            log_likelihood
+            + log_prior
+            - log_proposal
+        )
+
+
+    return importance_weights, S0_samples, evals_samples, evecs_samples  #S0_samples, evals_samples, evecs_samples
+
+
+def sequential_monte_carlo_sampling(prior, likelihood, y, n_samples, gamma_param, nu_param, S0_init, D_init):
+    pass
 
 
 @disk_memoize()
@@ -591,7 +650,6 @@ Plotting function and the main() script to run experiments.
 
 def main():
 
-
     # Initialize with preprocessed data and DTI point estimate
     # (these values can be used as starting points for inference methods)
 
@@ -601,7 +659,6 @@ def main():
 
     # Find principal eigenvector from DTI estimate (for plotting)
     evec_principal = evecs_init[:, 0]
-
     # Set random seed and number of posterior samples
     np.random.seed(0)
     n_samples = 10000
@@ -628,8 +685,36 @@ def main():
     plot_results(S0_mh[burn_in:], evals_mh[burn_in:], evecs_mh[burn_in:, :, :], evec_principal, method="mh")
 
     # Run Importance Sampling and plot results
-    w_is, S0_is, evals_is, evecs_is = importance_sampling(force_recompute=False)
+    # gamma_param, nu_param = 1, 10
+    # gamma_params = [0.9, 0.93, 0.94, 0.95, 0.96,0.97,0.98,0.99, 1, 1.05, 1.1, 1.2]
+    # nu_params = [100, 101, 102,103,104, 105,110]
+    # for gamma_param in gamma_params:
+    #     for nu_param in nu_params: 
+    #         #a = likelihood.logpdf(S0_init, evecs_init, evals_init, y)
+    #         w_is, S0_is, evals_is, evecs_is = importance_sampling(
+    #             prior, likelihood, y, n_samples, gamma_param, nu_param, S0_init, D_init
+    #         )#, force_recompute=False)
+    #         normalized_importance_weights = np.exp(w_is - logsumexp(w_is))
+    #         effective_sample_size = 1/np.sum(normalized_importance_weights**2)
+    #         print(f"effective sample size (N_ESS) at gamma={gamma_param} and nu={nu_param}: {effective_sample_size}")
+    # manual testing gives these as optimal (with roughly 20 effective samples, which is quite bad)
+    gamma_param = 0.98
+    nu_param=105
+    w_is, S0_is, evals_is, evecs_is = importance_sampling(
+        prior, likelihood, y, n_samples, gamma_param, nu_param, S0_init, D_init
+    )#, force_recompute=False)
+    normalized_importance_weights = np.exp(w_is - logsumexp(w_is))
+    effective_sample_size = 1/np.sum(normalized_importance_weights**2)
+    print(f"effective sample size (N_ESS) at gamma={gamma_param} and nu={nu_param}: {effective_sample_size} out of total {n_samples}")
+    
+    sequential_monte_carlo_sampling(
+        prior, likelihood, y, n_samples, gamma_param, nu_param, S0_init, D_init
+    )
+
+
     plot_results(S0_is, evals_is, evecs_is, evec_principal, weights=w_is, method="is")
+
+
 
     # Run Variational Inference and plot results
     posterior_vi = variational_inference(force_recompute=False)
