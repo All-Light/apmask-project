@@ -513,15 +513,45 @@ class variational_posterior:
 
 
 class mvn_reparameterized:
-    # Placeholder for multivariate normal approximation.
-    # Hint: you may want to add input parameters to these methods.
-    
-    def __init__(self):
-        raise NotImplementedError
-    
-    def rvs(self, size):
-        raise NotImplementedError
-    
+    """
+    Multivariate Normal distribution in the transformed parameter space theta in R^7,
+    where:
+      - theta[0] = log(S0)
+      - theta[1:7] = unconstrained lower-triangular Cholesky entries of D.
+    """
+    def __init__(self, mean, cov):
+        self.mean = np.asarray(mean)
+        self.cov = np.asarray(cov)
+        self.mvn = multivariate_normal(mean=self.mean, cov=self.cov)
+
+    def logpdf(self, theta):
+        """Evaluate log-density of theta in the transformed parameter space."""
+        return self.mvn.logpdf(theta)
+
+    def rvs(self, size=1):
+        """
+        Sample theta ~ N(mean, cov) and transform back to (S0, evals, evecs).
+
+        Returns
+        -------
+        S0_samples : ndarray, shape (size,)
+        evals_samples : ndarray, shape (size, 3)
+        evecs_samples : ndarray, shape (size, 3, 3)
+        """
+        theta_samples = self.mvn.rvs(size=size)
+        if size == 1:
+            theta_samples = theta_samples[None, :]
+
+        # 1. Map log(S0) -> S0
+        S0_samples = np.exp(theta_samples[:, 0])
+
+        # 2. Map theta[1:] -> Diffusion Tensor D
+        D_samples = D_from_theta(theta_samples[:, 1:])
+
+        # 3. Eigendecomposition to get eigenvalues and eigenvectors
+        # np.linalg.eigh handles batched (size, 3, 3) arrays efficiently
+        evals_samples, evecs_samples = np.linalg.eigh(D_samples)
+
         return S0_samples, evals_samples, evecs_samples
 
 
@@ -629,15 +659,101 @@ def variational_inference(max_iters, K, learning_rate):
 
 
 @disk_memoize()
-def laplace_approximation():
-    # Students: implement the Laplace Approximation here.
-    # Before starting, make sure the prior, likelihood and mvn_reparameterized are implemented.
-    # Note: you may change, add, or remove input parameters depending on your design
-    # (e.g. pass initialization values like those prepared in main()).
+def laplace_approximation(y=None, gtab=None, point_estimate=None, prior=None, likelihood=None):
+    """
+    Computes the Laplace approximation of the posterior in transformed space theta in R^7.
+    """
+    # Load data and initial point estimate if not explicitly passed
+    if y is None or point_estimate is None or gtab is None:
+        y, point_estimate, gtab = get_preprocessed_data()
 
-    raise NotImplementedError
+    S0_init, evals_init, evecs_init = point_estimate
+    D_init = compute_D(evals_init, evecs_init).squeeze()
 
-    return mvn_reparameterized(...)
+    # Initialize model components if not provided
+    if prior is None:
+        sigma = 29
+        alpha_s = 2
+        theta_s = 500
+        alpha_lambda = 4
+        theta_lambda = 2.5 * 10**(-4)
+        prior = frozen_prior(alpha_s, theta_s, alpha_lambda, theta_lambda)
+
+    if likelihood is None:
+        sigma = 29
+        likelihood = frozen_likelihood(gtab, sigma)
+
+    # 1. Transform initial estimates into unconstrained space theta_0 in R^7
+    theta_S0_init = np.log(S0_init)
+    theta_D_init = theta_from_D(D_init)
+    theta_init = np.concatenate([[theta_S0_init], theta_D_init])
+
+    # 2. Define the objective function (Negative Log-Posterior)
+    def neg_log_posterior(theta):
+        S0 = np.exp(theta[0])
+        D = D_from_theta(theta[1:])
+
+        # Eigendecomposition to evaluate prior and likelihood
+        evals, evecs = np.linalg.eigh(D)
+
+        # Safeguard against negative/zero eigenvalues if numerical edge cases occur
+        if np.any(evals <= 0):
+            return 1e10
+
+        log_p = prior.logpdf(S0, evals[0], evals[1], evals[2], evecs)
+        log_l = likelihood.logpdf(S0, evecs, evals, y)
+
+        total_log_post = log_l + log_p
+        if np.isnan(total_log_post):
+            return 1e10
+
+        return -total_log_post
+
+    # 3. Optimize to find the mode theta_hat
+    opt_result = minimize(neg_log_posterior, theta_init, method='L-BFGS-B')
+    theta_hat = opt_result.x
+
+    # 4. Compute the Hessian matrix numerically at the mode using central differences
+    def compute_hessian(f, x0, eps=1e-4):
+        n = len(x0)
+        hessian = np.zeros((n, n))
+        f0 = f(x0)
+
+        # Diagonal elements
+        for i in range(n):
+            x_plus, x_minus = x0.copy(), x0.copy()
+            x_plus[i] += eps
+            x_minus[i] -= eps
+            hessian[i, i] = (f(x_plus) - 2 * f0 + f(x_minus)) / (eps**2)
+
+        # Off-diagonal elements
+        for i in range(n):
+            for j in range(i + 1, n):
+                x_pp, x_pm, x_mp, x_mm = x0.copy(), x0.copy(), x0.copy(), x0.copy()
+                x_pp[i] += eps; x_pp[j] += eps
+                x_pm[i] += eps; x_pm[j] -= eps
+                x_mp[i] -= eps; x_mp[j] += eps
+                x_mm[i] -= eps; x_mm[j] -= eps
+
+                h_ij = (f(x_pp) - f(x_pm) - f(x_mp) + f(x_mm)) / (4 * eps**2)
+                hessian[i, j] = h_ij
+                hessian[j, i] = h_ij
+
+        return hessian
+
+    H = compute_hessian(neg_log_posterior, theta_hat)
+
+    # 5. Invert Hessian to get Covariance Matrix Sigma = H^(-1)
+    try:
+        cov = np.linalg.inv(H)
+    except np.linalg.LinAlgError:
+        cov = np.linalg.pinv(H)
+
+    # Ensure covariance matrix is strictly symmetric
+    cov = 0.5 * (cov + cov.T)
+
+    return mvn_reparameterized(mean=theta_hat, cov=cov)
+
 
 
 
