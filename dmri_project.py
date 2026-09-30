@@ -575,7 +575,7 @@ def metropolis_hastings(n_samples, gamma_param, nu_param, plot_traces=False):
     return S0_samples, evals_samples, evecs_samples
 
 
-#@disk_memoize()
+@disk_memoize()
 def importance_sampling(prior, likelihood, y, n_samples, gamma_param, nu_param, S0_init, D_init):
     # Students: implement Importance Sampling here.
     # Before starting, make sure the prior and likelihood are implemented.
@@ -641,9 +641,79 @@ def importance_sampling(prior, likelihood, y, n_samples, gamma_param, nu_param, 
 
     return importance_weights, S0_samples, evals_samples, evecs_samples  #S0_samples, evals_samples, evecs_samples
 
-
+@disk_memoize()
 def sequential_monte_carlo_sampling(prior, likelihood, y, n_samples, gamma_param, nu_param, S0_init, D_init):
-    pass
+    # Importance sampling jumps directly to from proposal to posterior, in SMCS we move in internediate distributions
+    # z = (S0, lam1, lam2, lam 3, V)
+    # p(z|y) \prop p(z)p(y|z)
+    # pi_t(z) \prop p(z)p(y|z)^(beta)
+    s0, lam1, lam2, lam3, V = prior.rvs(size=n_samples)
+
+    log_weights = np.full(n_samples, -np.log(n_samples))
+    evals = np.array([lam1,lam2,lam3]).T
+    log_likelihoods = np.array([likelihood.logpdf(
+        S0=s0[i], 
+        evals=evals[i],
+        evecs=V[i], 
+        y=y
+    ) for i in range(n_samples)], dtype=float)
+
+    prev_beta = 0.0
+    betas = np.linspace(0,1,1001)
+    for beta in betas:
+        log_weights += (beta-prev_beta) *log_likelihoods
+        log_weights -= logsumexp(log_weights)
+
+        weights = np.exp(log_weights)
+        effective_sample_size = 1/np.sum(weights**2)
+        #print(f"effective sample size (N_ESS) before resampling beta={beta}: {effective_sample_size} out of total {n_samples}")
+        if(effective_sample_size < 0.8*n_samples):
+            # resampling if we have too low ess
+            indices = np.random.choice(
+                n_samples, size=n_samples, replace=True, p=weights
+            )
+            s0 = s0[indices]
+            evals = evals[indices]
+            V = V[indices]
+            log_likelihoods = log_likelihoods[indices]
+            log_weights.fill(-np.log(n_samples)) # equalize all weights
+
+            # rejuvenate
+            new_s0, new_lam1, new_lam2, new_lam3, new_V = prior.rvs(size=n_samples)
+
+            new_evals = np.array([new_lam1,new_lam2,new_lam3]).T
+            new_log_likelihoods = np.array([likelihood.logpdf(
+                S0=new_s0[i], 
+                evals=new_evals[i],
+                evecs=new_V[i], 
+                y=y
+            ) for i in range(n_samples)], dtype=float)
+
+            log_acceptance = beta * (new_log_likelihoods - log_likelihoods)
+            
+            accept = np.log(np.random.random(n_samples)) < log_acceptance
+
+            s0[accept] = new_s0[accept]
+            evals[accept] = new_evals[accept]
+            V[accept] = new_V[accept]
+            log_likelihoods[accept] = new_log_likelihoods[accept]
+
+            #print(f"Rejuvenation acceptance: {np.mean(accept)}")
+            states = np.column_stack((s0, evals, V.reshape(n_samples, -1)))
+
+            #print(f"beta={beta:.4f}, ESS before={effective_sample_size:.0f}")
+            #print("distinct before:", np.unique(
+            #    np.column_stack((s0, evals, V.reshape(n_samples, -1))), axis=0
+            #).shape[0])
+            #print("distinct resampled indices:", np.unique(indices).size)
+            #print("moves accepted:", np.count_nonzero(accept))
+
+        prev_beta = beta
+    order = np.argsort(evals, axis=1)
+    evals = np.take_along_axis(evals, order, axis=1)
+    V = np.take_along_axis(V, order[:, None, :], axis=2)
+    return np.exp(log_weights), s0, evals, V
+
 
 
 @disk_memoize()
@@ -789,30 +859,30 @@ def main():
     prior = frozen_prior(alpha_s, theta_s, alpha_lambda, theta_lambda)
 
 
-    print("prior logpdf: ",prior.logpdf(S0_init,evals_init[0],evals_init[1],evals_init[2],evecs_init))
+    #print("prior logpdf: ",prior.logpdf(S0_init,evals_init[0],evals_init[1],evals_init[2],evecs_init))
 
     likelihood = frozen_likelihood(gtab, sigma)
     a = likelihood.logpdf(S0_init, evecs_init, evals_init, y)
-    print("likelihood logpdf: ",a)
+    #print("likelihood logpdf: ",a)
     
     # Run Metropolis–Hastings and plot results
-    S0_mh, evals_mh, evecs_mh = metropolis_hastings(force_recompute=False)
-    burn_in = 0
-    plot_results(S0_mh[burn_in:], evals_mh[burn_in:], evecs_mh[burn_in:, :, :], evec_principal, method="mh")
+    #S0_mh, evals_mh, evecs_mh = metropolis_hastings(force_recompute=False)
+    #burn_in = 0
+    #plot_results(S0_mh[burn_in:], evals_mh[burn_in:], evecs_mh[burn_in:, :, :], evec_principal, method="mh")
 
     # Run Importance Sampling and plot results
     # gamma_param, nu_param = 1, 10
-    # gamma_params = [0.9, 0.93, 0.94, 0.95, 0.96,0.97,0.98,0.99, 1, 1.05, 1.1, 1.2]
-    # nu_params = [100, 101, 102,103,104, 105,110]
-    # for gamma_param in gamma_params:
-    #     for nu_param in nu_params: 
-    #         #a = likelihood.logpdf(S0_init, evecs_init, evals_init, y)
-    #         w_is, S0_is, evals_is, evecs_is = importance_sampling(
-    #             prior, likelihood, y, n_samples, gamma_param, nu_param, S0_init, D_init
-    #         )#, force_recompute=False)
-    #         normalized_importance_weights = np.exp(w_is - logsumexp(w_is))
-    #         effective_sample_size = 1/np.sum(normalized_importance_weights**2)
-    #         print(f"effective sample size (N_ESS) at gamma={gamma_param} and nu={nu_param}: {effective_sample_size}")
+    #gamma_params = [0.9, 0.93, 0.94, 0.95, 0.96,0.97,0.98,0.99, 1, 1.05, 1.1, 1.2]
+    #nu_params = [100, 101, 102,103,104, 105,110]
+    #for gamma_param in gamma_params:
+    #    for nu_param in nu_params: 
+    #        #a = likelihood.logpdf(S0_init, evecs_init, evals_init, y)
+    #        w_is, S0_is, evals_is, evecs_is = importance_sampling(
+    #            prior, likelihood, y, n_samples, gamma_param, nu_param, S0_init, D_init
+    #        )#, force_recompute=False)
+    #        normalized_importance_weights = np.exp(w_is - logsumexp(w_is))
+    #        effective_sample_size = 1/np.sum(normalized_importance_weights**2)
+    #        print(f"effective sample size (N_ESS) at gamma={gamma_param} and nu={nu_param}: {effective_sample_size}")
     # manual testing gives these as optimal (with roughly 20 effective samples, which is quite bad)
     gamma_param = 0.98
     nu_param=105
@@ -823,29 +893,32 @@ def main():
     effective_sample_size = 1/np.sum(normalized_importance_weights**2)
     print(f"effective sample size (N_ESS) at gamma={gamma_param} and nu={nu_param}: {effective_sample_size} out of total {n_samples}")
     
-    sequential_monte_carlo_sampling(
+    plot_results(S0_is, evals_is, evecs_is, evec_principal, weights=normalized_importance_weights, method="is", large_text=True)
+
+    w_smc, S0_smc, evals_smc, evecs_smc = sequential_monte_carlo_sampling(
         prior, likelihood, y, n_samples, gamma_param, nu_param, S0_init, D_init
     )
 
+    plot_results(S0_smc, evals_smc, evecs_smc, evec_principal, weights=w_smc, method="smc", large_text=True)
 
-    plot_results(S0_is, evals_is, evecs_is, evec_principal, weights=w_is, method="is")
+
 
 
 
     # Run Variational Inference and plot results
-    posterior_vi = variational_inference(force_recompute=False)
-    S0_vi, evals_vi, evecs_vi = posterior_vi.rvs(size=n_samples)
-    plot_results(S0_vi, evals_vi, evecs_vi, evec_principal, method="vi")
+    # posterior_vi = variational_inference(force_recompute=False)
+    # S0_vi, evals_vi, evecs_vi = posterior_vi.rvs(size=n_samples)
+    # plot_results(S0_vi, evals_vi, evecs_vi, evec_principal, method="vi")
 
-    # Run Laplace Approximation and plot results
-    posterior_laplace = laplace_approximation(force_recompute=False)
-    S0_laplace, evals_laplace, evecs_laplace = posterior_laplace.rvs(size=n_samples)
-    plot_results(S0_laplace, evals_laplace, evecs_laplace, evec_principal, method="laplace")
+    # # Run Laplace Approximation and plot results
+    # posterior_laplace = laplace_approximation(force_recompute=False)
+    # S0_laplace, evals_laplace, evecs_laplace = posterior_laplace.rvs(size=n_samples)
+    # plot_results(S0_laplace, evals_laplace, evecs_laplace, evec_principal, method="laplace")
 
     print("Done.")
 
 
-def plot_results(S0, evals, evecs, evec_ref, weights=None, method=""):
+def plot_results(S0, evals, evecs, evec_ref, weights=None, method="", large_text=False):
     """
     Plot posterior results as histograms and save to file.
 
@@ -888,6 +961,14 @@ def plot_results(S0, evals, evecs, evec_ref, weights=None, method=""):
     
     # Create 2x2 grid of histograms
     fig, axes = plt.subplots(2, 2, figsize=(12, 12), sharey=False)
+    if(large_text):
+        for ax in axes.flat:
+            ax.tick_params(axis="both", labelsize=16)
+            ax.xaxis.label.set_size(20)
+            ax.yaxis.label.set_size(20)
+            ax.xaxis.get_offset_text().set_fontsize(16)
+            ax.yaxis.get_offset_text().set_fontsize(16)
+
 
     axes[0, 0].hist(S0, bins=n_bins, density=True, weights=weights, 
                     alpha=0.7, color='red', edgecolor='black')
@@ -898,7 +979,10 @@ def plot_results(S0, evals, evecs, evec_ref, weights=None, method=""):
                     alpha=0.7, color='green', edgecolor='black')
     axes[0, 1].set_xlabel("Mean diffusivity")
     axes[0, 1].set_ylabel("Density")
-
+    if(large_text): # fix unreadable text
+        axes[0, 1].ticklabel_format(
+            axis="x", style="sci", scilimits=(0,0), useMathText=True, useOffset=False
+        )
     axes[1, 0].hist(fa, bins=n_bins, density=True, weights=weights,
                      alpha=0.7, color='blue', edgecolor='black')
     axes[1, 0].set_xlabel("Fractional anisotropy")
