@@ -564,13 +564,81 @@ Uses memoization to speed up repeated runs.
 """
 
 @disk_memoize()
-def metropolis_hastings(n_samples, gamma_param, nu_param, plot_traces=False):
+def metropolis_hastings(y, n_samples, prior, likelihood, gamma_param, nu_param, S0_init, D_init, plot_traces=False):
     # Students: implement Metropolis-Hastings here.
     # Before starting, make sure the prior and likelihood are implemented.
     # Note: you may change, add, or remove input parameters depending on your design
     # (e.g. pass initialization values like those prepared in main()).
 
-    raise NotImplementedError
+    # q_S0 = gamma(a=gamma_param ** (-2), scale=gamma_param ** 2 * S0_init)  # gamma distribution
+    # q_D = wishart(df=nu_param, scale=D_init / nu_param)  # wishart distribution
+    rng = np.random.default_rng()
+
+    def log_target(S0, D):
+        evals, evecs = np.linalg.eigh(D)
+
+        log_likelihood = likelihood.logpdf(
+            S0=S0, evals=evals, evecs=evecs, y=y,
+        )
+        log_prior = prior.logpdf(
+            s0=S0,
+            lam1=evals[0],
+            lam2=evals[1],
+            lam3=evals[2],
+            V=evecs,
+        )
+
+        # Convert the eigenvalue/rotation prior density to a density over D
+        log_jacobian = (
+                np.log(evals[1] - evals[0])
+                + np.log(evals[2] - evals[0])
+                + np.log(evals[2] - evals[1])
+        )
+
+        return log_likelihood + log_prior - log_jacobian
+
+    def log_proposal(S0_to, D_to, S0_from, D_from):
+        return (
+                gamma(
+                    a=gamma_param ** (-2),
+                    scale=gamma_param ** 2 * S0_from,
+                ).logpdf(S0_to)
+                + wishart(
+            df=nu_param,
+            scale=D_from,
+        ).logpdf(D_to)
+        )
+
+    S0_current = S0_init
+    D_current = D_init
+
+    S0_samples, evals_samples, evecs_samples = np.zeros(n_samples), np.zeros((n_samples, 3)), np.zeros((n_samples, 3, 3))
+
+    for i in range(n_samples):
+        S0_proposed = gamma(
+            a=gamma_param ** (-2),
+            scale=gamma_param ** 2 * S0_current,
+        ).rvs()
+
+        D_proposed = wishart(df=nu_param, scale=D_current).rvs()
+
+        log_a = (
+                log_target(S0_proposed, D_proposed)
+                + log_proposal(S0_current, D_current, S0_proposed, D_proposed)  # reverse
+
+                - log_target(S0_current, D_current)
+                - log_proposal(S0_proposed, D_proposed, S0_current, D_current)  # forward
+        )
+
+        if np.log(rng.uniform()) < min(0.0, log_a):
+            S0_current = S0_proposed
+            D_current = D_proposed
+
+        S0_samples[i] = S0_current
+        evals, evecs = np.linalg.eigh(D_current)
+        evals_samples[i] = evals
+        evecs_samples[i] = evecs
+
 
     return S0_samples, evals_samples, evecs_samples
 
@@ -866,9 +934,17 @@ def main():
     #print("likelihood logpdf: ",a)
     
     # Run Metropolis–Hastings and plot results
-    #S0_mh, evals_mh, evecs_mh = metropolis_hastings(force_recompute=False)
-    #burn_in = 0
-    #plot_results(S0_mh[burn_in:], evals_mh[burn_in:], evecs_mh[burn_in:, :, :], evec_principal, method="mh")
+    gamma_param = 0.98
+    nu_param = 105
+    S0_mh, evals_mh, evecs_mh = metropolis_hastings(y, n_samples, prior, likelihood,
+                                                    gamma_param, nu_param,
+                                                    S0_init, D_init, plot_traces=False,
+                                                    force_recompute=False)
+    burn_in = 0
+    plot_results(S0_mh[burn_in:], evals_mh[burn_in:], evecs_mh[burn_in:, :, :], evec_principal, method="mh")
+    print("Done with MH.")
+
+    return
 
     # Run Importance Sampling and plot results
     # gamma_param, nu_param = 1, 10
