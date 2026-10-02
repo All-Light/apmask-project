@@ -662,7 +662,7 @@ def metropolis_hastings(y, n_samples, prior, likelihood, gamma_param, nu_param, 
                 ).logpdf(S0_to)
                 + wishart(
             df=nu_param,
-            scale=D_from,
+            scale=D_from / nu_param,  # centered: mean D instead of nu*D
         ).logpdf(D_to)
         )
 
@@ -677,7 +677,7 @@ def metropolis_hastings(y, n_samples, prior, likelihood, gamma_param, nu_param, 
             scale=gamma_param ** 2 * S0_current,
         ).rvs()
 
-        D_proposed = wishart(df=nu_param, scale=D_current).rvs()
+        D_proposed = wishart(df=nu_param, scale=D_current / nu_param).rvs()
 
         log_a = (
                 log_target(S0_proposed, D_proposed)
@@ -1098,20 +1098,17 @@ def main():
     a = likelihood.logpdf(S0_init, evecs_init, evals_init, y)
     #print("likelihood logpdf: ",a)
     
-    """
     # Run Metropolis–Hastings and plot results
-    gamma_param = 0.98
-    nu_param = 105
+    gamma_param = 0.01
+    nu_param = 2400
     S0_mh, evals_mh, evecs_mh = metropolis_hastings(y, n_samples, prior, likelihood,
                                                     gamma_param, nu_param,
-                                                    S0_init, D_init, plot_traces=False,
-                                                    force_recompute=False)
-    burn_in = 0
+                                                    S0_init, D_init, plot_traces=False)
+    burn_in = 500
     plot_results(S0_mh[burn_in:], evals_mh[burn_in:], evecs_mh[burn_in:, :, :], evec_principal, method="mh")
     credible_intervals(S0_mh[burn_in:], evals_mh[burn_in:], evecs_mh[burn_in:, :, :], evec_principal, method="Metropolis-Hastings")
 
     print("Done with MH.")
-    """
 
     # Run Importance Sampling and plot results
     # gamma_param, nu_param = 1, 10
@@ -1127,7 +1124,6 @@ def main():
     #        effective_sample_size = 1/np.sum(normalized_importance_weights**2)
     #        print(f"effective sample size (N_ESS) at gamma={gamma_param} and nu={nu_param}: {effective_sample_size}")
     # manual testing gives these as optimal (with roughly 20 effective samples, which is quite bad)
-    """
     gamma_param = 0.98
     nu_param=105
     w_is, S0_is, evals_is, evecs_is = importance_sampling(
@@ -1146,7 +1142,7 @@ def main():
 
     plot_results(S0_smc, evals_smc, evecs_smc, evec_principal, weights=w_smc, method="smc", large_text=True)
     credible_intervals(S0_smc, evals_smc, evecs_smc, evec_principal, method="Sequential Monte Carlo sampling")
-    """
+
     # Run Variational Inference and plot results
     posterior_vi = variational_inference(prior, likelihood, y, point_estimate, force_recompute=True)
     S0_vi, evals_vi, evecs_vi = posterior_vi.rvs(size=n_samples)
