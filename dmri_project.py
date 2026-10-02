@@ -402,8 +402,6 @@ Students: implement all parts in this section (priors, likelihoods, etc.)
 These are required before any inference method can be attempted.
 """
 
-# Goal p(Diffussion, S0 | Data)
-
 class frozen_prior:
     def __init__(self, alpha_s, theta_s, alpha_lambda, theta_lambda):
         self.p_s0 = gamma(a=alpha_s, scale=theta_s)
@@ -431,7 +429,7 @@ class frozen_likelihood:
         self.sigma = sigma
 
     def logpdf(self, S0, evecs, evals, y):
-        #p(z|Data) \prop p(Data|z)p(z)
+        #p(z|y) \prop p(y_i|z)p(z)
         S0 = np.atleast_1d(S0)        # ensure S0 is array-like
         D = compute_D(evals, evecs)   # reconstruct diffusion tensor
 
