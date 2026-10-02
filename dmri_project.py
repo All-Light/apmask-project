@@ -902,6 +902,7 @@ def credible_intervals(S0, evals, evecs, evec_principal, method="", weights=None
         ci_fa = np.percentile(fa_samples, [2.5, 97.5])
         ci_angle = np.percentile(angle_samples, [2.5, 97.5])
     else:
+        # https://stackoverflow.com/questions/21844024/weighted-percentile-using-numpy
         def interval(samples):
             return DescrStatsW(data=np.asarray(samples).reshape(-1),
                                 weights=np.asarray(weights).reshape(-1)
