@@ -471,24 +471,83 @@ class variational_posterior:
     # The score() method is already implemented and can be used later
     # when implementing inference (with REINFORCE leave-one-out estimator).
 
-    def __init__(self):
-        raise NotImplementedError
+    def __init__(self, theta=None, shape=None, scale=None, Sigma=None, df=None):
+        if theta is not None:
+            self.theta = np.asarray(theta, dtype=float)
+            # theta[0] and theta[1]: shape and scale for S0 (must be positive)
+            self.shape = float(np.exp(self.theta[0]))
+            self.scale = float(np.exp(self.theta[1]))
+            # theta[2:8]: 6 parameters defining lower-triangular L, D = L L^T
+            self.Sigma = D_from_theta(self.theta[2:8])
+            # theta[8]: degrees of freedom nu (must be > 2 for 3x3 matrix)
+            self.df = float(np.exp(self.theta[8]) + 2.0)
+        else:
+            self.shape = float(shape)
+            self.scale = float(scale)
+            self.Sigma = np.asarray(Sigma, dtype=float)
+            self.df = float(df)
+            self.theta = np.concatenate([
+                [np.log(self.shape)],
+                [np.log(self.scale)],
+                theta_from_D(self.Sigma),
+                [np.log(max(self.df - 2.0, 1e-6))]
+            ])
 
-    def logpdf(self):
-        raise NotImplementedError
+        # Setup distribution objects
+        self.q_s0 = gamma(a=self.shape, scale=self.scale)
+        # In SciPy, wishart mean is df * scale. We want E[D] = Sigma, so scale = Sigma / df.
+        self.q_D = wishart(df=self.df, scale=self.Sigma / self.df)
+
+    def logpdf(self, S0, D=None, evals=None, evecs=None):
+            if D is None:
+                D = compute_D(evals, evecs).squeeze()
+            if evals is None:
+                evals, _ = np.linalg.eigh(D)
+                evals = np.sort(evals)
+
+            log_q_s0 = self.q_s0.logpdf(S0)
+            log_q_D = self.q_D.logpdf(D)
+
+            # Jacobian adjustment for D -> (evals, evecs)
+            log_jacobian = (
+                np.log(np.maximum(evals[1] - evals[0], 1e-12))
+                + np.log(np.maximum(evals[2] - evals[0], 1e-12))
+                + np.log(np.maximum(evals[2] - evals[1], 1e-12))
+            )
+            return log_q_s0 + log_q_D + log_jacobian
     
-    def rvs(self, size):
-        raise NotImplementedError
+    def rvs(self, size=1):
+            # 1. Sample baseline S0 from Gamma and tensor D from Wishart
+            S0_samples = self.q_s0.rvs(size=size)
+            D_samples = self.q_D.rvs(size=size)
 
-        return S0_samples, evals_samples, evecs_samples
+            if size == 1:
+                D_samples = D_samples[None, :, :]
+                S0_samples = np.atleast_1d(S0_samples)
+
+            # 2. Decompose D into eigenvalues and eigenvectors
+            evals_samples, evecs_samples = np.linalg.eigh(D_samples)
+
+            if size == 1:
+                return S0_samples[0], evals_samples[0], evecs_samples[0]
+            return S0_samples, evals_samples, evecs_samples
 
     def score(self, S0, D):
         # Combine score contributions from gamma and Wishart parts
         score_wrt_log_shape, score_wrt_log_scale = self.gamma_score(S0)
         score_wrt_theta, score_wrt_log_df = self.wishart_score(D)
+        """
         return np.concatenate([
             score_wrt_log_shape, score_wrt_log_scale, score_wrt_theta, score_wrt_log_df]
         )
+        """
+        # Combine score contributions from gamma and Wishart parts
+        return np.array([
+            float(score_wrt_log_shape),
+            float(score_wrt_log_scale),
+            *np.ravel(score_wrt_theta),
+            float(score_wrt_log_df)
+        ], dtype=float)
 
     def gamma_score(self, x):
         # Score function for gamma distribution
@@ -508,7 +567,12 @@ class variational_posterior:
         _, logdet_W = np.linalg.slogdet(W)
         _, logdet_Sigma = np.linalg.slogdet(self.Sigma)
         digamma_sum = np.sum([digamma((self.df + 1 - j) / 2.0) for j in range(1, p+1)])
-        score_wrt_log_df = ((self.df - 2) / 2) * (logdet_W - p * np.log(2) - logdet_Sigma - digamma_sum)
+        
+        # score_wrt_log_df = ((self.df - 2) / 2) * (logdet_W - p * np.log(2) - logdet_Sigma - digamma_sum)
+        score_wrt_log_df = ((self.df - 2) / 2) * (
+            logdet_W - p*np.log(2) - logdet_Sigma - digamma_sum
+            + p - np.trace(Sigma_inv @ D)
+        )
         return score_wrt_theta, score_wrt_log_df
 
 
@@ -617,15 +681,88 @@ def sequential_monte_carlo_sampling(prior, likelihood, y, n_samples, gamma_param
 
 
 @disk_memoize()
-def variational_inference(max_iters, K, learning_rate):
-    # Students: implement Variational Inference here.
-    # Before starting, make sure the prior, likelihood and variational_posterior are implemented.
-    # Note: you may change, add, or remove input parameters depending on your design
-    # (e.g. pass initialization values like those prepared in main()).
+def variational_inference(prior=None, likelihood=None, y=None, point_estimate=None,
+                          max_iters=1500, K=64, learning_rate=0.05, lr_final=0.002, n_avg=300, verbose=True):
+    # Fallback to load default dataset if not passed
+    if y is None or point_estimate is None:
+        y, point_estimate, gtab = get_preprocessed_data(force_recompute=False)
+        if likelihood is None:
+            likelihood = frozen_likelihood(gtab, sigma=29)
+        if prior is None:
+            prior = frozen_prior(alpha_s=2, theta_s=500, alpha_lambda=4, theta_lambda=2.5e-4)
 
-    raise NotImplementedError
+    S0_init, evals_init, evecs_init = point_estimate
+    D_init = compute_D(evals_init, evecs_init).squeeze()
 
-    return variational_posterior(...)
+    # Center initial variational approximation on the point estimate
+    shape_init = 1000.0
+    scale_init = float(S0_init) / shape_init
+    df_init = 200.0
+    
+    theta = np.concatenate([
+        [np.log(shape_init)],
+        [np.log(scale_init)],
+        theta_from_D(D_init),
+        [np.log(max(df_init - 2.0, 1e-4))]
+    ])
+
+    # Adam optimizer running moments
+    m = np.zeros_like(theta)
+    v = np.zeros_like(theta)
+    beta1, beta2, eps = 0.9, 0.999, 1e-8
+
+
+    theta_hist = []
+    for it in range(1, max_iters + 1):
+        lr = lr_final + (learning_rate - lr_final) * 0.5 * (1 + np.cos(np.pi * it / max_iters))
+        q_current = variational_posterior(theta=theta)
+
+        # 1. Draw K Monte Carlo samples
+        S0_s, evals_s, evecs_s = q_current.rvs(size=K)
+
+        f_vals = np.zeros(K)
+        scores = np.zeros((K, len(theta)))
+
+        for k in range(K):
+            D_k = compute_D(evals_s[k], evecs_s[k]).squeeze()
+
+            log_lik = likelihood.logpdf(S0_s[k], evecs_s[k], evals_s[k], y)
+            log_pr = prior.logpdf(S0_s[k], evals_s[k, 0], evals_s[k, 1], evals_s[k, 2], evecs_s[k])
+            log_q = q_current.logpdf(S0_s[k], D=D_k, evals=evals_s[k])
+
+            # Discrepancy function f(z) = log p(y, z) - log q(z)
+            f_vals[k] = log_lik + log_pr - log_q
+            scores[k] = q_current.score(S0_s[k], D_k)
+
+        # 2. Leave-one-out baseline to reduce gradient variance
+        sum_f = np.sum(f_vals)
+        baseline = (sum_f - f_vals) / (K - 1)
+        delta = f_vals - baseline
+        grad = np.mean(delta[:, None] * scores, axis=0)
+
+        # 4. Adam step (ascent)
+        m = beta1 * m + (1.0 - beta1) * grad
+        v = beta2 * v + (1.0 - beta2) * (grad ** 2)
+        m_hat = m / (1.0 - beta1 ** it)
+        v_hat = v / (1.0 - beta2 ** it)
+        theta += lr * m_hat / (np.sqrt(v_hat) + eps)
+
+        # 5. Stability bounds
+        theta[0] = np.clip(theta[0], 0.0, 14.0)
+        theta[1] = np.clip(theta[1], -10.0, 10.0)
+        theta[2:8] = np.clip(theta[2:8], -20.0, 20.0)
+        theta[8] = np.clip(theta[8], -5.0, 14.0)
+
+        if it > max_iters - n_avg:
+            theta_hist.append(theta.copy())
+
+        if verbose and (it % 50 == 0 or it == max_iters or it == 1):
+            print(f"Iter {it:3d}/{max_iters} | Approx ELBO: {np.mean(f_vals):10.2f}")
+
+    # Polyak averaging over the last n_avg iterates reduces SGD noise
+    return variational_posterior(theta=np.mean(theta_hist, axis=0))
+
+
 
 
 @disk_memoize()
@@ -678,7 +815,7 @@ def main():
     likelihood = frozen_likelihood(gtab, sigma)
     a = likelihood.logpdf(S0_init, evecs_init, evals_init, y)
     print("likelihood logpdf: ",a)
-    
+    """
     # Run Metropolis–Hastings and plot results
     S0_mh, evals_mh, evecs_mh = metropolis_hastings(force_recompute=False)
     burn_in = 0
@@ -713,21 +850,21 @@ def main():
 
 
     plot_results(S0_is, evals_is, evecs_is, evec_principal, weights=w_is, method="is")
-
+    """
 
 
     # Run Variational Inference and plot results
-    posterior_vi = variational_inference(force_recompute=False)
+    posterior_vi = variational_inference(prior, likelihood, y, point_estimate, force_recompute=True)
     S0_vi, evals_vi, evecs_vi = posterior_vi.rvs(size=n_samples)
     plot_results(S0_vi, evals_vi, evecs_vi, evec_principal, method="vi")
-
+    """
     # Run Laplace Approximation and plot results
     posterior_laplace = laplace_approximation(force_recompute=False)
     S0_laplace, evals_laplace, evecs_laplace = posterior_laplace.rvs(size=n_samples)
     plot_results(S0_laplace, evals_laplace, evecs_laplace, evec_principal, method="laplace")
-
+    """
     print("Done.")
-
+    
 
 def plot_results(S0, evals, evecs, evec_ref, weights=None, method=""):
     """
@@ -796,7 +933,6 @@ def plot_results(S0, evals, evecs, evec_ref, weights=None, method=""):
     # Adjust layout and save figure with method name
     plt.tight_layout()
     plt.savefig("results_{}.png".format(method), dpi=300, bbox_inches='tight')
-
 
 if __name__ == "__main__":
     main()
