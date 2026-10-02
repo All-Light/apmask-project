@@ -1147,11 +1147,11 @@ def main():
     plot_results(S0_vi, evals_vi, evecs_vi, evec_principal, method="vi")
     credible_intervals(S0_vi, evals_vi, evecs_vi, evec_principal, method="Variational inference")
 
-    # # Run Laplace Approximation and plot results
-    #posterior_laplace = laplace_approximation(force_recompute=False)
-    #S0_laplace, evals_laplace, evecs_laplace = posterior_laplace.rvs(size=n_samples)
-    #plot_results(S0_laplace, evals_laplace, evecs_laplace, evec_principal, method="laplace")
-    #credible_intervals(S0_laplace, evals_laplace, evecs_laplace, evec_principal, method="Laplace Approximation")
+    # Run Laplace Approximation and plot results
+    posterior_laplace = laplace_approximation()
+    S0_laplace, evals_laplace, evecs_laplace = posterior_laplace.rvs(size=n_samples)
+    plot_results(S0_laplace, evals_laplace, evecs_laplace, evec_principal, method="laplace")
+    credible_intervals(S0_laplace, evals_laplace, evecs_laplace, evec_principal, method="Laplace Approximation")
 
     print("Done.")
 
