@@ -892,6 +892,31 @@ def laplace_approximation(y=None, gtab=None, point_estimate=None, prior=None, li
 
     return mvn_reparameterized(mean=theta_hat, cov=cov)
 
+# =============================================================================
+# Posterior Uncertainty: 95% Credible Intervals 
+# =============================================================================
+def credible_intervals(S0, evals, evecs, evec_principal, method=""):    
+    # 1. Compute scalar metrics from Laplace posterior samples
+    S0_samples = S0.squeeze()
+    md_samples = dti.mean_diffusivity(evals).squeeze()
+    fa_samples = dti.fractional_anisotropy(evals).squeeze()
+    angle_samples = (360 / (2 * np.pi)) * np.arccos(np.abs(np.dot(evecs[:, :, 2], evec_principal)))
+
+    # 2. Calculate 2.5th and 97.5th percentiles (95% CI)
+    ci_S0 = np.percentile(S0_samples, [2.5, 97.5])
+    ci_md = np.percentile(md_samples, [2.5, 97.5])
+    ci_fa = np.percentile(fa_samples, [2.5, 97.5])
+    ci_angle = np.percentile(angle_samples, [2.5, 97.5])
+
+    # 3. Print formatted results
+    print(f"\n95% credible intervals of psterior uncertainty for method '{method}'")
+    print(f"S0 95% CI: [{ci_S0[0]:.2f}, {ci_S0[1]:.2f}]")
+    print(f"Mean Diffusivity 95% CI: [{ci_md[0]:.6f}, {ci_md[1]:.6f}]")
+    print(f"Fractional Anisotropy 95% CI: [{ci_fa[0]:.3f}, {ci_fa[1]:.3f}]")
+    print(f"Acute Angle 95% CI: [{ci_angle[0]:.2f}°, {ci_angle[1]:.2f}°]\n")
+    
+
+
 
 
 
@@ -942,9 +967,10 @@ def main():
                                                     force_recompute=False)
     burn_in = 0
     plot_results(S0_mh[burn_in:], evals_mh[burn_in:], evecs_mh[burn_in:, :, :], evec_principal, method="mh")
+    credible_intervals(S0_mh, evals_mh, evecs_mh, evec_principal, method="Metropolis-Hastings")
+
     print("Done with MH.")
 
-    return
 
     # Run Importance Sampling and plot results
     # gamma_param, nu_param = 1, 10
@@ -970,49 +996,26 @@ def main():
     print(f"effective sample size (N_ESS) at gamma={gamma_param} and nu={nu_param}: {effective_sample_size} out of total {n_samples}")
     
     plot_results(S0_is, evals_is, evecs_is, evec_principal, weights=normalized_importance_weights, method="is", large_text=True)
-
+    
+    credible_intervals(S0_is, evals_is, evecs_is, evec_principal, method="Importance sampling")
     w_smc, S0_smc, evals_smc, evecs_smc = sequential_monte_carlo_sampling(
         prior, likelihood, y, n_samples, gamma_param, nu_param, S0_init, D_init
     )
 
     plot_results(S0_smc, evals_smc, evecs_smc, evec_principal, weights=w_smc, method="smc", large_text=True)
-
-
-
-
+    credible_intervals(S0_smc, evals_smc, evecs_smc, evec_principal, method="Sequential Monte Carlo sampling")
 
     # Run Variational Inference and plot results
     # posterior_vi = variational_inference(force_recompute=False)
     # S0_vi, evals_vi, evecs_vi = posterior_vi.rvs(size=n_samples)
     # plot_results(S0_vi, evals_vi, evecs_vi, evec_principal, method="vi")
+    #credible_intervals(S0_vi, evals_vi, evecs_vi, evec_principal, method="Variational inference")
 
     # # Run Laplace Approximation and plot results
-    # posterior_laplace = laplace_approximation(force_recompute=False)
-    # S0_laplace, evals_laplace, evecs_laplace = posterior_laplace.rvs(size=n_samples)
-    # plot_results(S0_laplace, evals_laplace, evecs_laplace, evec_principal, method="laplace")
-    
-    # =============================================================================
-    # Posterior Uncertainty: 95% Credible Intervals (Laplace Approximation)
-    # =============================================================================
-    print("\n--- Laplace Approximation: 95% Equal-Tailed Credible Intervals ---")
-    
-    # 1. Compute scalar metrics from Laplace posterior samples
-    S0_samples = S0_laplace.squeeze()
-    md_samples = dti.mean_diffusivity(evals_laplace).squeeze()
-    fa_samples = dti.fractional_anisotropy(evals_laplace).squeeze()
-    angle_samples = (360 / (2 * np.pi)) * np.arccos(np.abs(np.dot(evecs_laplace[:, :, 2], evec_principal)))
-
-    # 2. Calculate 2.5th and 97.5th percentiles (95% CI)
-    ci_S0 = np.percentile(S0_samples, [2.5, 97.5])
-    ci_md = np.percentile(md_samples, [2.5, 97.5])
-    ci_fa = np.percentile(fa_samples, [2.5, 97.5])
-    ci_angle = np.percentile(angle_samples, [2.5, 97.5])
-
-    # 3. Print formatted results
-    print(f"S0 95% CI: [{ci_S0[0]:.2f}, {ci_S0[1]:.2f}]")
-    print(f"Mean Diffusivity 95% CI: [{ci_md[0]:.6f}, {ci_md[1]:.6f}]")
-    print(f"Fractional Anisotropy 95% CI: [{ci_fa[0]:.3f}, {ci_fa[1]:.3f}]")
-    print(f"Acute Angle 95% CI: [{ci_angle[0]:.2f}°, {ci_angle[1]:.2f}°]\n")
+    #posterior_laplace = laplace_approximation(force_recompute=False)
+    #S0_laplace, evals_laplace, evecs_laplace = posterior_laplace.rvs(size=n_samples)
+    #plot_results(S0_laplace, evals_laplace, evecs_laplace, evec_principal, method="laplace")
+    #credible_intervals(S0_laplace, evals_laplace, evecs_laplace, evec_principal, method="Laplace Approximation")
 
     print("Done.")
 
