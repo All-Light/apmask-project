@@ -403,9 +403,6 @@ These are required before any inference method can be attempted.
 # Goal p(Diffussion, S0 | Data)
 
 class frozen_prior:
-    # Placeholder for the prior distribution.
-    # Hint: you may want to add input parameters to these methods.
-
     def __init__(self, alpha_s, theta_s, alpha_lambda, theta_lambda):
         self.p_s0 = gamma(a=alpha_s, scale=theta_s)
         self.p_lam1 = gamma(a=alpha_lambda, scale=theta_lambda)
@@ -427,13 +424,9 @@ class frozen_prior:
 
 
 class frozen_likelihood:
-    # Placeholder for the likelihood (with partial code provided).
-    # Hint: you may want to add input parameters to these methods.
-
     def __init__(self, gtab, sigma):        
         self.gtab = gtab   # store gradient table with b-values and b-vectors
         self.sigma = sigma
-        #raise NotImplementedError
 
     def logpdf(self, S0, evecs, evals, y):
         #p(z|Data) \prop p(Data|z)p(z)
@@ -449,8 +442,6 @@ class frozen_likelihood:
 
         return np.sum(norm.logpdf(y, loc=S, scale=self.sigma))
         
-        #raise NotImplementedError
-
 
 
 """
