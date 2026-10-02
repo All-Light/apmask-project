@@ -79,6 +79,8 @@ from dipy.data import get_fnames                   # for small datasets that we 
 from dipy.segment.mask import median_otsu          # for masking out the background
 import dipy.reconst.dti as dti                     # for diffusion tensor model fitting and metrics
 
+# weighted credible interval
+from statsmodels.stats.weightstats import DescrStatsW
 
 
 """
@@ -886,7 +888,7 @@ def laplace_approximation(y=None, gtab=None, point_estimate=None, prior=None, li
 # =============================================================================
 # Posterior Uncertainty: 95% Credible Intervals 
 # =============================================================================
-def credible_intervals(S0, evals, evecs, evec_principal, method=""):    
+def credible_intervals(S0, evals, evecs, evec_principal, method="", weights=None):    
     # 1. Compute scalar metrics from Laplace posterior samples
     S0_samples = S0.squeeze()
     md_samples = dti.mean_diffusivity(evals).squeeze()
@@ -894,10 +896,21 @@ def credible_intervals(S0, evals, evecs, evec_principal, method=""):
     angle_samples = (360 / (2 * np.pi)) * np.arccos(np.abs(np.dot(evecs[:, :, 2], evec_principal)))
 
     # 2. Calculate 2.5th and 97.5th percentiles (95% CI)
-    ci_S0 = np.percentile(S0_samples, [2.5, 97.5])
-    ci_md = np.percentile(md_samples, [2.5, 97.5])
-    ci_fa = np.percentile(fa_samples, [2.5, 97.5])
-    ci_angle = np.percentile(angle_samples, [2.5, 97.5])
+    if weights is None:
+        ci_S0 = np.percentile(S0_samples, [2.5, 97.5])
+        ci_md = np.percentile(md_samples, [2.5, 97.5])
+        ci_fa = np.percentile(fa_samples, [2.5, 97.5])
+        ci_angle = np.percentile(angle_samples, [2.5, 97.5])
+    else:
+        def interval(samples):
+            return DescrStatsW(data=np.asarray(samples).reshape(-1),
+                                weights=np.asarray(weights).reshape(-1)
+            ).quantile(probs=[0.025, 0.975], return_pandas=False)
+        
+        ci_S0 = interval(S0_samples)
+        ci_md = interval(md_samples)
+        ci_fa = interval(fa_samples)
+        ci_angle = interval(angle_samples)
 
     # 3. Print formatted results
     print(f"\n95% credible intervals of psterior uncertainty for method '{method}'")
@@ -958,7 +971,7 @@ def main():
                                                     force_recompute=False)
     burn_in = 0
     plot_results(S0_mh[burn_in:], evals_mh[burn_in:], evecs_mh[burn_in:, :, :], evec_principal, method="mh")
-    credible_intervals(S0_mh, evals_mh, evecs_mh, evec_principal, method="Metropolis-Hastings")
+    credible_intervals(S0_mh[burn_in:], evals_mh[burn_in:], evecs_mh[burn_in:, :, :], evec_principal, method="Metropolis-Hastings")
 
     print("Done with MH.")
 
@@ -988,7 +1001,7 @@ def main():
     
     plot_results(S0_is, evals_is, evecs_is, evec_principal, weights=normalized_importance_weights, method="is", large_text=True)
     
-    credible_intervals(S0_is, evals_is, evecs_is, evec_principal, method="Importance sampling")
+    credible_intervals(S0_is, evals_is, evecs_is, evec_principal, method="Importance sampling", weights=normalized_importance_weights)
     w_smc, S0_smc, evals_smc, evecs_smc = sequential_monte_carlo_sampling(
         prior, likelihood, y, n_samples, gamma_param, nu_param, S0_init, D_init
     )
