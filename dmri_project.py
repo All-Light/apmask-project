@@ -643,14 +643,7 @@ def metropolis_hastings(y, n_samples, prior, likelihood, gamma_param, nu_param, 
             V=evecs,
         )
 
-        # Convert the eigenvalue/rotation prior density to a density over D
-        log_jacobian = (
-                np.log(evals[1] - evals[0])
-                + np.log(evals[2] - evals[0])
-                + np.log(evals[2] - evals[1])
-        )
-
-        return log_likelihood + log_prior - log_jacobian
+        return log_likelihood + log_prior
 
     def log_proposal(S0_to, D_to, S0_from, D_from):
         return (
@@ -1099,10 +1092,12 @@ def main():
     # Run Metropolis–Hastings and plot results
     gamma_param = 0.01
     nu_param = 2400
-    S0_mh, evals_mh, evecs_mh = metropolis_hastings(y, n_samples, prior, likelihood,
+    burn_in = 500
+
+    S0_mh, evals_mh, evecs_mh = metropolis_hastings(y, n_samples + burn_in, prior, likelihood,
                                                     gamma_param, nu_param,
                                                     S0_init, D_init, plot_traces=False)
-    burn_in = 500
+
     plot_results(S0_mh[burn_in:], evals_mh[burn_in:], evecs_mh[burn_in:, :, :], evec_principal, method="mh")
     credible_intervals(S0_mh[burn_in:], evals_mh[burn_in:], evecs_mh[burn_in:, :, :], evec_principal, method="Metropolis-Hastings")
 
