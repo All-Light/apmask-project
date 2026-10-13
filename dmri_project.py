@@ -1139,7 +1139,7 @@ def main():
     )
 
     plot_results(S0_smc, evals_smc, evecs_smc, evec_principal, weights=w_smc, method="smc", large_text=True)
-    credible_intervals(S0_smc, evals_smc, evecs_smc, evec_principal, method="Sequential Monte Carlo sampling")
+    credible_intervals(S0_smc, evals_smc, evecs_smc, evec_principal, method="Sequential Monte Carlo sampling", weights=w_smc)
 
     # Run Variational Inference and plot results
     posterior_vi = variational_inference(prior, likelihood, y, point_estimate, force_recompute=True)
